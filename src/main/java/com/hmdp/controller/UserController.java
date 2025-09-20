@@ -30,8 +30,8 @@ public class UserController {
      * 发送手机验证码
      */
     @PostMapping("code")
-    public Result sendCode(@RequestParam("phone") String phone, HttpSession session) {
-        return userService.sendCode(phone, session);
+    public Result sendCode(@RequestParam("phone") String phone) {
+        return userService.sendCode(phone);
     }
 
     /**
@@ -49,8 +49,8 @@ public class UserController {
      */
     @PostMapping("/logout")
     public Result logout(){
-        // TODO 实现登出功能
-        return Result.fail("功能未完成");
+        userService.logout();
+        return Result.ok();
     }
 
     /**

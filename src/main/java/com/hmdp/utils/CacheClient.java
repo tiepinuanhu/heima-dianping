@@ -1,6 +1,8 @@
 package com.hmdp.utils;
 
+import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.entity.Shop;
 import lombok.extern.slf4j.Slf4j;
@@ -8,6 +10,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -19,6 +23,11 @@ public class CacheClient {
 
     private final StringRedisTemplate stringRedisTemplate;
 
+
+    /**
+     * 用于逻辑过期，获取锁成功后，重建缓存的线程池
+     */
+    private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
 
     public CacheClient(StringRedisTemplate stringRedisTemplate) {
         this.stringRedisTemplate = stringRedisTemplate;
@@ -96,4 +105,79 @@ public class CacheClient {
     }
 
 
+    /**
+     * 对Redis的某个key进行加锁
+     * @param key
+     * @return
+     */
+    private boolean tryLock(String key) {
+        Boolean b = stringRedisTemplate.opsForValue().setIfAbsent(key, "1",
+                LOCK_SHOP_TTL, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(b);
+    }
+
+    /**
+     * 释放锁
+     * @param key
+     */
+    private void unLock(String key) {
+        stringRedisTemplate.delete(key);
+    }
+
+    /**
+     * 使用逻辑过期解决缓存穿透问题
+     * 1. 查询缓存
+     * 2. 命中，查看是否过期
+     * 3. 未过期，直接返回； 过期，则获取锁
+     * 4. 获取成功，启动新线程进行查数据库, 返回shop信息； 获取失败，返回shop数据
+     * @param id
+     * @return
+     */
+    public <T, ID> T queryByIdWithLogicalExpire(String keyPrefix, ID id,
+                                                Class<T> type,
+                                                Function<ID,T> dbFallBack,
+                                                Long time, TimeUnit timeUnit)  {
+
+        String key = keyPrefix + id;
+        // 查询缓存
+        String jsonStr = stringRedisTemplate.opsForValue().get(key);
+        // 缓存未命中
+        if (StrUtil.isBlank(jsonStr)) {
+            return null;
+        }
+        // 缓存命中
+
+        RedisData redisData = JSONUtil.toBean(jsonStr, RedisData.class);
+        JSONObject jsonObject = (JSONObject) redisData.getData();
+        T bean = JSONUtil.toBean(jsonObject, type);
+        LocalDateTime expireTime = redisData.getExpireTime();
+
+
+        // 缓存未过期，返回数据
+        if (expireTime.isAfter(LocalDateTime.now())) {
+            return bean;
+        }
+        String lockKey = LOCK_SHOP_KEY + id;
+        boolean isLock = tryLock(lockKey);
+        // 获取锁成功
+        if (isLock) {
+            log.debug("locked");
+
+            CACHE_REBUILD_EXECUTOR.submit(() -> {
+                try {
+                    // 执行重建
+                    T data = dbFallBack.apply(id);
+                    setWithLogicalExpire(key, data, time, timeUnit);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    // 任务完成后再释放锁
+                    unLock(lockKey);
+                }
+            });
+
+        }
+        // 没有获取锁成功，就返回旧数据
+        return bean;
+    }
 }

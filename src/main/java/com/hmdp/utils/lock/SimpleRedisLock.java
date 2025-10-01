@@ -35,7 +35,7 @@ public class SimpleRedisLock implements ILock{
     @Override
     public boolean tryLock(long timeoutSec) {
         String key = key_prefix + name;
-        String value =ID_PREFIX + Thread.currentThread().getId();
+        String value = ID_PREFIX + Thread.currentThread().getId();
 
         Boolean ok = stringRedisTemplate.opsForValue().setIfAbsent(
                 key, value,
@@ -53,6 +53,7 @@ public class SimpleRedisLock implements ILock{
         String key = key_prefix + name;
         String value = stringRedisTemplate.opsForValue().get(key);
         String currentValue = ID_PREFIX + Thread.currentThread().getId();
+        // 如果判断成功，但是阻塞了，后续也会存在并发安全问题，导致误删key
         if (value.equals(currentValue)) {
             stringRedisTemplate.delete(key_prefix + name);
         }

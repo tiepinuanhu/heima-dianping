@@ -12,6 +12,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
 import com.hmdp.utils.lock.SimpleRedisLock;
+import org.redisson.Redisson;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -29,6 +32,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     StringRedisTemplate stringRedisTemplate;
+
+
+    @Resource
+    RedissonClient redissonClient;
 
     @Resource
     RedisIdWorker redisIdWorker;
@@ -61,8 +68,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 确保事务提交后，再释放锁
         // 否则，事务还没提交，还没写入数据库，就释放了锁
         // 其他线程判断没有订单，从而进行了插入订单，从而导致了并发安全问题
-        SimpleRedisLock lock = new SimpleRedisLock(stringRedisTemplate, "order:" + userId);
-        boolean locked = lock.tryLock(1200);
+//        SimpleRedisLock lock = new SimpleRedisLock(stringRedisTemplate, "order:" + userId);
+//        boolean locked = lock.tryLock(1200);
+
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+        boolean locked = lock.tryLock();
         // 获取锁失败，证明该用户有多个线程同时下单，这是不允许的
         if (!locked) {
             return Result.fail("不允许多次下单");

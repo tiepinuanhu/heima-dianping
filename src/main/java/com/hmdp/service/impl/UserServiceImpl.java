@@ -61,11 +61,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
      *  3.1 用户不存在则注册
      *  3.2 保存到session中
      * @param loginForm
-     * @param session
+     * @param
      * @return
      */
     @Override
-    public Result login(LoginFormDTO loginForm, HttpSession session) {
+    public Result login(LoginFormDTO loginForm) {
         String phone = loginForm.getPhone();
         boolean phoneInvalid = RegexUtils.isPhoneInvalid(phone);
         if (phoneInvalid) {

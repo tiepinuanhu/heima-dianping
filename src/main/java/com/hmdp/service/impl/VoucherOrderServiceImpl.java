@@ -69,7 +69,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 否则，事务还没提交，还没写入数据库，就释放了锁
         // 其他线程判断没有订单，从而进行了插入订单，从而导致了并发安全问题
 //        SimpleRedisLock lock = new SimpleRedisLock(stringRedisTemplate, "order:" + userId);
-//        boolean locked = lock.tryLock(1200);
+//        boolean locked = lock.tryLock(1);
 
         RLock lock = redissonClient.getLock("lock:order:" + userId);
         boolean locked = lock.tryLock();

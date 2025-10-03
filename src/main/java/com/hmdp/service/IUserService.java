@@ -17,4 +17,5 @@ public interface IUserService extends IService<User> {
     Result login(LoginFormDTO loginForm);
 
     void logout();
+
 }

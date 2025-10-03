@@ -59,9 +59,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 //                CACHE_SHOP_KEY, id, Shop.class,
 //                this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
         Shop shop = cacheClient.queryByIdWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class,
-                this::getById, 20L, TimeUnit.SECONDS);
+                this::getById, CACHE_SHOP_TTL, TimeUnit.SECONDS);
         if (shop == null) {
-            return Result.fail("shop is not exist");
+            shop = this.getById(id);
+            cacheClient.setWithLogicalExpire(CACHE_SHOP_KEY + id, shop, CACHE_SHOP_TTL, TimeUnit.SECONDS);
         }
         return Result.ok(shop);
     }

@@ -13,10 +13,13 @@ import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
-import javax.servlet.http.HttpSession;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.*;
 import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
@@ -98,6 +101,54 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String token = UserHolder.getToken();
         stringRedisTemplate.delete(LOGIN_USER_KEY + token);
     }
+
+    /**
+     * 用户签到
+     *
+     * @return
+     * @Date 2025-10-06 15:15:14
+     */
+    @Override
+    public Result sign() {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("user not login");
+        }
+        Long userId = user.getId();
+        LocalDateTime now = LocalDateTime.now();
+        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyy:MM"));
+        String key = "sign:" + userId + keySuffix;
+        int dayOfMonth = now.getDayOfMonth() - 1;
+        stringRedisTemplate.opsForValue().setBit(key, dayOfMonth, true);
+        return Result.ok();
+    }
+
+    @Override
+    public Result signCount() {
+        UserDTO user = UserHolder.getUser();
+        if (user == null) {
+            return Result.fail("user not login");
+        }
+        Long userId = user.getId();
+        LocalDateTime now = LocalDateTime.now();
+        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyy:MM"));
+        String key = "sign:" + userId + keySuffix;
+        int dayOfMonth = now.getDayOfMonth();
+        int count = 0;
+        List<Long> longs = stringRedisTemplate.opsForValue().bitField(key,
+                BitFieldSubCommands.create().get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)).valueAt(0)
+        );
+        Long value = longs.get(0);
+        if (value == null || value == 0) {
+            return Result.ok(0);
+        }
+        while ((value & 1) != 0) {
+            value >>>= 1;
+            count++;
+        }
+        return Result.ok(count);
+    }
+
 
     private User createUserWithPhone(String phone) {
         User r = new User();

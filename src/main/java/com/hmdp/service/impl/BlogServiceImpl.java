@@ -3,11 +3,14 @@ package com.hmdp.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.controller.BlogController;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.Follow;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IBlogService;
@@ -17,18 +20,19 @@ import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import jodd.util.StringUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
+import javax.servlet.ServletConfig;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
+import static com.hmdp.utils.RedisConstants.INBOX_KEY;
 
 /**
  */
@@ -42,7 +46,14 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
 
     @Resource
+    FollowServiceImpl followService;
+
+
+
+    @Resource
     StringRedisTemplate stringRedisTemplate;
+    @Autowired
+    private ServletConfig servletConfig;
 
     @Override
     public Result getHotBlog(Integer current) {
@@ -65,10 +76,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         blog.setName(blogOwner.getNickName());
         blog.setIcon(blogOwner.getIcon());
         // 判断当前用户是否对blog点赞过，并设置blog的isLiked字段
-        Long userId = UserHolder.getUser().getId();
-        if (userId == null) {
+        if (UserHolder.getUser() == null) {
+            blog.setIsLike(false);
             return;
         }
+        Long userId = UserHolder.getUser().getId();
         Double score = stringRedisTemplate.opsForZSet()
                 .score(BLOG_LIKED_KEY + blog.getId(), userId.toString());
         blog.setIsLike(score != null);
@@ -140,5 +152,78 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
                 .collect(Collectors.toList());
         return Result.ok(userDTOS);
+    }
+
+    /**
+     * 发布笔记，并推送给所有粉丝
+     *
+     * @param blog
+     * @return
+     */
+    @Override
+    public Result saveBlog(Blog blog) {
+        // 获取登录用户
+        Long userId = UserHolder.getUser().getId();
+        blog.setUserId(userId);
+        // 保存探店博文
+        boolean saved = this.save(blog);
+        if (!saved) {
+            return Result.fail("发布笔记失败");
+        }
+        // 查询当前用户的所有粉丝
+        LambdaQueryWrapper<Follow> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(Follow::getFollowUserId, userId);
+        List<Follow> followList = followService.list(queryWrapper);
+        if (followList == null || followList.isEmpty()) {
+            return Result.ok(Collections.emptyList());
+        }
+        // 将新的笔记推送给所有粉丝
+        for (Follow follow : followList) {
+            Long followerId = follow.getUserId();
+            // 推送blog的id
+            stringRedisTemplate.opsForZSet()
+                    .add( INBOX_KEY + followerId, blog.getId().toString(), System.currentTimeMillis());
+        }
+        // 返回id
+        return Result.ok(blog.getId());
+    }
+
+    @Override
+    public Result getFollowBlog(Long max, Integer offset) {
+        Long userId = UserHolder.getUser().getId();
+
+        // 查询用户的inbox，解析blogId和时间戳
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(INBOX_KEY + userId,
+                        0, max, offset, 2);
+        if (typedTuples == null || typedTuples.isEmpty()) {
+            return Result.ok(Collections.emptyList());
+        }
+
+        List<Long> ids = new ArrayList<>(typedTuples.size());
+        long minTime = 0;
+        int retOffset = 0;
+        for (ZSetOperations.TypedTuple<String> typedTuple : typedTuples) {
+            Long blogId = Long.valueOf(typedTuple.getValue());
+            ids.add(blogId);
+            long temp = typedTuple.getScore().longValue();
+            if (temp == minTime) {
+                retOffset++;
+            } else {
+                retOffset = 1;
+            }
+            minTime = Math.min(minTime, temp);
+        }
+        ScrollResult scrollResult = new ScrollResult();
+
+        String join = StrUtil.join(",", ids);
+        List<Blog> blogs = query().in("id", ids)
+                .last("order by field(id," + join + ")").list();
+        blogs.forEach(blog -> setBlogUser(blog));
+
+        scrollResult.setList(blogs);
+        scrollResult.setMinTime(minTime);
+        scrollResult.setOffset(retOffset);
+        return Result.ok(scrollResult);
     }
 }
